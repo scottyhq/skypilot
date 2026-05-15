@@ -108,6 +108,26 @@ def _build_custom_sbatch_directives(sbatch_options: Dict[str, Any]) -> str:
     return '\n' + '\n'.join(lines)
 
 
+def _build_time_directive(maxtime: Optional[int]) -> str:
+    """Return #SBATCH --time directive, or '' when the partition is unlimited.
+
+    When MaxTime=UNLIMITED on the Slurm partition (maxtime is None), omit
+    --time so Slurm uses the partition DefaultTime instead. Explicitly
+    requesting --time=UNLIMITED prevents scheduling when maintenance
+    reservations are in effect, because Slurm cannot guarantee the job
+    finishes before the reserved window.
+    """
+    if maxtime is None:
+        logger.warning(
+            f'{colorama.Fore.YELLOW}Partition MaxTime is UNLIMITED. Omitting '
+            f'--time from the sbatch script; Slurm will use the partition '
+            f'DefaultTime. If DefaultTime is also UNLIMITED, maintenance '
+            f'reservations may still prevent scheduling.'
+            f'{colorama.Style.RESET_ALL}')
+        return ''
+    return f'#SBATCH --time={slurm_utils.format_slurm_duration(maxtime)}\n'
+
+
 def _wait_for_job_nodes(
     client: 'slurm.SlurmClient',
     job_id: str,
@@ -273,7 +293,7 @@ def _create_virtual_instance(
     if partition_info is None:
         raise ValueError(f'Partition info for {partition} not found '
                          f'for SLURM cluster {slurm_cluster}')
-    max_time = slurm_utils.format_slurm_duration(partition_info.maxtime)
+    time_directive = _build_time_directive(partition_info.maxtime)
 
     # COMPLETING state occurs when a job is being terminated - during this
     # phase, slurmd sends SIGTERM to tasks, waits for KillWait period, sends
@@ -563,8 +583,7 @@ echo "[container-init] Packages installed in $((SECONDS - INIT_START))s"
 #SBATCH --output={_sbatch_log_path(sbatch_log_base_dir, '%j')}
 #SBATCH --error={_sbatch_log_path(sbatch_log_base_dir, '%j')}
 #SBATCH --nodes={num_nodes}
-#SBATCH --time={max_time}
-#SBATCH --wait-all-nodes=1
+{time_directive}#SBATCH --wait-all-nodes=1
 # Let the job be terminated rather than requeued implicitly.
 #SBATCH --no-requeue
 #SBATCH --cpus-per-task={int(resources["cpus"])}

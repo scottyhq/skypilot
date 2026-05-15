@@ -6,8 +6,28 @@ import jsonschema
 import pytest
 
 from sky.provision.slurm.instance import _build_custom_sbatch_directives
+from sky.provision.slurm.instance import _build_time_directive
 from sky.provision.slurm.instance import _SBATCH_PROTECTED_OPTIONS
 from sky.utils.schemas import get_config_schema
+
+
+class TestBuildTimeDirective:
+    """Test _build_time_directive()."""
+
+    def test_unlimited_maxtime_omits_directive(self):
+        """When MaxTime=UNLIMITED (None), --time must not appear in sbatch."""
+        result = _build_time_directive(None)
+        assert result == ''
+        assert '--time' not in result
+
+    def test_concrete_maxtime_includes_directive(self):
+        """When MaxTime is set, --time must appear with the formatted value."""
+        result = _build_time_directive(3600)
+        assert result == '#SBATCH --time=0-01:00:00\n'
+
+    def test_concrete_maxtime_multiday(self):
+        result = _build_time_directive(100000)
+        assert result == '#SBATCH --time=1-03:46:40\n'
 
 
 class TestBuildCustomSbatchDirectives:
