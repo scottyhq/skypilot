@@ -583,11 +583,11 @@ echo "[container-init] Packages installed in $((SECONDS - INIT_START))s"
 #SBATCH --output={_sbatch_log_path(sbatch_log_base_dir, '%j')}
 #SBATCH --error={_sbatch_log_path(sbatch_log_base_dir, '%j')}
 #SBATCH --nodes={num_nodes}
-{time_directive}#SBATCH --wait-all-nodes=1
+#SBATCH --wait-all-nodes=1
 # Let the job be terminated rather than requeued implicitly.
 #SBATCH --no-requeue
 #SBATCH --cpus-per-task={int(resources["cpus"])}
-{mem_directive}{gpu_directive}{custom_sbatch_directives}
+{time_directive}{mem_directive}{gpu_directive}{custom_sbatch_directives}
 
 # Cleanup function to remove cluster dirs on job termination.
 cleanup() {{
