@@ -14,19 +14,28 @@ from sky.utils.schemas import get_config_schema
 class TestBuildTimeDirective:
     """Test _build_time_directive()."""
 
-    def test_unlimited_maxtime_omits_directive(self):
-        """When MaxTime=UNLIMITED (None), --time must not appear in sbatch."""
-        result = _build_time_directive(None)
+    def test_concrete_maxtime_uses_maxtime(self):
+        """MaxTime takes priority over DefaultTime."""
+        result = _build_time_directive(maxtime=7200, defaulttime=3600)
+        assert result == '#SBATCH --time=0-02:00:00\n'
+
+    def test_concrete_maxtime_no_defaulttime(self):
+        result = _build_time_directive(maxtime=3600, defaulttime=None)
+        assert result == '#SBATCH --time=0-01:00:00\n'
+
+    def test_unlimited_maxtime_falls_back_to_defaulttime(self):
+        """MaxTime=UNLIMITED with a concrete DefaultTime uses DefaultTime."""
+        result = _build_time_directive(maxtime=None, defaulttime=3600)
+        assert result == '#SBATCH --time=0-01:00:00\n'
+
+    def test_both_unlimited_omits_directive(self):
+        """Both unlimited → omit --time entirely."""
+        result = _build_time_directive(maxtime=None, defaulttime=None)
         assert result == ''
         assert '--time' not in result
 
-    def test_concrete_maxtime_includes_directive(self):
-        """When MaxTime is set, --time must appear with the formatted value."""
-        result = _build_time_directive(3600)
-        assert result == '#SBATCH --time=0-01:00:00\n'
-
     def test_concrete_maxtime_multiday(self):
-        result = _build_time_directive(100000)
+        result = _build_time_directive(maxtime=100000, defaulttime=None)
         assert result == '#SBATCH --time=1-03:46:40\n'
 
 
@@ -162,6 +171,11 @@ class TestBuildCustomSbatchDirectives:
         result = _build_custom_sbatch_directives(allowed_options)
         for key, value in allowed_options.items():
             assert f'#SBATCH --{key}={value}' in result
+
+    def test_time_allowed_in_sbatch_options(self):
+        """--time is no longer protected; users can set it explicitly."""
+        result = _build_custom_sbatch_directives({'time': '4:00:00'})
+        assert result == '\n#SBATCH --time=4:00:00'
 
 
 class TestSbatchConfigSchema:

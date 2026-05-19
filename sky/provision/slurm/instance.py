@@ -47,7 +47,6 @@ _SBATCH_PROTECTED_OPTIONS = frozenset({
     'output',
     'error',
     'nodes',
-    'time',
     'wait-all-nodes',
     'no-requeue',
     'cpus-per-task',
@@ -108,24 +107,27 @@ def _build_custom_sbatch_directives(sbatch_options: Dict[str, Any]) -> str:
     return '\n' + '\n'.join(lines)
 
 
-def _build_time_directive(maxtime: Optional[int]) -> str:
-    """Return #SBATCH --time directive, or '' when the partition is unlimited.
+def _build_time_directive(maxtime: Optional[int],
+                          defaulttime: Optional[int]) -> str:
+    """Return the #SBATCH --time directive for the sbatch script.
 
-    When MaxTime=UNLIMITED on the Slurm partition (maxtime is None), omit
-    --time so Slurm uses the partition DefaultTime instead. Explicitly
+    Priority: MaxTime > DefaultTime > omit.
+    When MaxTime=UNLIMITED and DefaultTime is set, use DefaultTime so the
+    time limit is explicit rather than relying on Slurm's implicit default.
+    When both are unlimited/unset, omit --time entirely and warn: explicitly
     requesting --time=UNLIMITED prevents scheduling when maintenance
-    reservations are in effect, because Slurm cannot guarantee the job
-    finishes before the reserved window.
+    reservations are in effect.
     """
-    if maxtime is None:
-        logger.warning(
-            f'{colorama.Fore.YELLOW}Partition MaxTime is UNLIMITED. Omitting '
-            f'--time from the sbatch script; Slurm will use the partition '
-            f'DefaultTime. If DefaultTime is also UNLIMITED, maintenance '
-            f'reservations may still prevent scheduling.'
-            f'{colorama.Style.RESET_ALL}')
+    effective = maxtime if maxtime is not None else defaulttime
+    source = 'MaxTime' if maxtime is not None else 'DefaultTime'
+    if effective is None:
+        logger.debug('Omitting --time from sbatch script: partition MaxTime '
+                     'and DefaultTime are both UNLIMITED/unset.')
         return ''
-    return f'#SBATCH --time={slurm_utils.format_slurm_duration(maxtime)}\n'
+    duration = slurm_utils.format_slurm_duration(effective)
+    logger.debug(f'Setting --time={duration} in sbatch script (from '
+                 f'partition {source}).')
+    return f'#SBATCH --time={duration}\n'
 
 
 def _wait_for_job_nodes(
@@ -293,7 +295,15 @@ def _create_virtual_instance(
     if partition_info is None:
         raise ValueError(f'Partition info for {partition} not found '
                          f'for SLURM cluster {slurm_cluster}')
-    time_directive = _build_time_directive(partition_info.maxtime)
+    # User can override --time via sbatch_options; if so, skip the directive.
+    sbatch_options = config.node_config.get('sbatch_options', {})
+    user_set_time = 'time' in {k.replace('_', '-') for k in sbatch_options}
+    if user_set_time:
+        logger.debug('Setting --time in sbatch script from sbatch_options.')
+        time_directive = ''
+    else:
+        time_directive = _build_time_directive(partition_info.maxtime,
+                                               partition_info.defaulttime)
 
     # COMPLETING state occurs when a job is being terminated - during this
     # phase, slurmd sends SIGTERM to tasks, waits for KillWait period, sends
@@ -645,6 +655,9 @@ touch {sky_cluster_home_dir}/.hushlogin
         cmd,
         'Failed to create provision scripts directory on login node.',
         stderr=f'{stdout}\n{stderr}')
+    sbatch_header = '\n'.join(
+        l for l in provision_script.splitlines() if l.startswith('#SBATCH'))
+    logger.debug(f'sbatch script header:\n{sbatch_header}')
     # Rsync the provision script to the login node
     with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=True) as f:
         f.write(provision_script)

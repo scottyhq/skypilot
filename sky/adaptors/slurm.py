@@ -25,6 +25,11 @@ _PARTITION_NAME_REGEX = re.compile(r'PartitionName=(.+?)(?:\s+\w+=|$)')
 # Matches MaxTime=<time> and captures the time
 _MAXTIME_REGEX = re.compile(r'MaxTime=((?:\d+-)?\d{1,2}:\d{2}:\d{2}|UNLIMITED)')
 
+# Regex pattern to extract DefaultTime from scontrol output
+# Matches DefaultTime=<time> or DefaultTime=NONE and captures the value
+_DEFAULTTIME_REGEX = re.compile(
+    r'DefaultTime=((?:\d+-)?\d{1,2}:\d{2}:\d{2}|UNLIMITED|NONE)')
+
 _IMPORT_ERROR_MESSAGE = ('Failed to import dependencies for Slurm. '
                          'Try running: pip install "skypilot[slurm]"')
 hostlist = common.LazyImport('hostlist',
@@ -40,6 +45,9 @@ class SlurmPartition(NamedTuple):
     # The maximum time a job can run in seconds.
     # None if the maximum time is unlimited.
     maxtime: Optional[int]
+    # The default time for a job if --time is not specified.
+    # None if unset (NONE) or unlimited.
+    defaulttime: Optional[int]
 
 
 # TODO(kevin): Add more API types for other client functions.
@@ -55,25 +63,35 @@ class NodeInfo(NamedTuple):
     partition: str
 
 
-def _parse_maxtime(line: str) -> Optional[int]:
-    """Parse the maximum time a job can run from the scontrol output."""
-    maxtime_match = _MAXTIME_REGEX.search(line)
-    if not maxtime_match:
+def _parse_slurm_time(time_str: str) -> Optional[int]:
+    """Convert a Slurm time string to seconds, or None if unlimited/unset."""
+    if time_str in ('UNLIMITED', 'NONE'):
         return None
-    maxtime_str = maxtime_match.group(1).strip()
-    if maxtime_str == 'UNLIMITED':
-        return None
-
-    # Convert maxTime from '[days-]hours:minutes:seconds' to seconds.
+    # Convert '[days-]hours:minutes:seconds' to seconds.
     # Example: "2-12:30:05" => (2*86400) + (12*3600) + (30*60) + 5
     days = 0
-    time_part = maxtime_str
-    if '-' in maxtime_str:
-        days_part, time_part = maxtime_str.split('-', 1)
+    time_part = time_str
+    if '-' in time_str:
+        days_part, time_part = time_str.split('-', 1)
         days = int(days_part)
-
     h, m, s = map(int, time_part.split(':'))
     return days * 86400 + h * 3600 + m * 60 + s
+
+
+def _parse_maxtime(line: str) -> Optional[int]:
+    """Parse the maximum time a job can run from the scontrol output."""
+    match = _MAXTIME_REGEX.search(line)
+    if not match:
+        return None
+    return _parse_slurm_time(match.group(1).strip())
+
+
+def _parse_defaulttime(line: str) -> Optional[int]:
+    """Parse the default job time from the scontrol output."""
+    match = _DEFAULTTIME_REGEX.search(line)
+    if not match:
+        return None
+    return _parse_slurm_time(match.group(1).strip())
 
 
 class SlurmClient:
@@ -595,13 +613,15 @@ class SlurmClient:
             if 'Default=YES' in line:
                 is_default = True
             maxtime = _parse_maxtime(line)
+            defaulttime = _parse_defaulttime(line)
             if match:
                 partition = match.group(1).strip()
                 if partition:
                     partitions.append(
                         SlurmPartition(name=partition,
                                        is_default=is_default,
-                                       maxtime=maxtime))
+                                       maxtime=maxtime,
+                                       defaulttime=defaulttime))
         return partitions
 
     def get_default_partition(self) -> Optional[str]:
